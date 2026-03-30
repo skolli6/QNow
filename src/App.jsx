@@ -10,6 +10,7 @@ import VendorDashboard  from './screens/VendorDashboard'
 import AdminLogin       from './screens/AdminLogin'
 import AdminDashboard   from './screens/AdminDashboard'
 import Help             from './screens/Help'
+import PrivacyPolicy    from './screens/PrivacyPolicy'
 import './index.css'
 
 export default function App() {
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="/admin"             element={<AdminLogin />} />
           <Route path="/admin/dashboard"   element={<AdminDashboard />} />
           <Route path="/help"              element={<Help />} />
+          <Route path="/privacy"           element={<PrivacyPolicy />} />
           <Route path="*"                  element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>

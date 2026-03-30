@@ -1,60 +1,38 @@
 /**
  * whatsappService.js
- * Meta WhatsApp Cloud API — used for NOTIFICATIONS ONLY.
  *
- * WhatsApp is NOT used for login or authentication in QNow.
- * Login = mobile number + 4-digit PIN (default: last 4 digits of mobile).
+ * Calls /api/whatsapp (our Vercel serverless proxy) instead of Meta's API directly.
+ * This avoids CORS and keeps the WhatsApp token secure on the server.
  *
- * WhatsApp sends automatic alerts at these events:
- *   1. Token issued (queue joined confirmation)
- *   2. 3 people ahead alert
- *   3. 15-minute before-turn alert
+ * WhatsApp is used for NOTIFICATIONS ONLY — not for login or authentication.
+ *
+ * Notifications sent:
+ *   1. Token confirmation (immediately after joining queue)
+ *   2. 3-people-ahead alert
+ *   3. 15-minute warning
  *   4. Your-turn-now alert
  *   5. Slot extended confirmation
- *
- * FREE setup:
- *  1. Go to https://developers.facebook.com → Create App → Business
- *  2. Add WhatsApp product → API Setup page
- *  3. Copy ACCESS_TOKEN and PHONE_NUMBER_ID into .env
- *  4. For testing: add up to 5 recipient numbers for free (no business verification needed)
- *  5. For production: verify business → 1000 free conversations/month, then ~₹0.60/conversation
  */
 
-const WA_TOKEN    = import.meta.env.VITE_WHATSAPP_TOKEN
-const WA_PHONE_ID = import.meta.env.VITE_WHATSAPP_PHONE_ID
-const WA_API_URL  = `https://graph.facebook.com/v18.0/${WA_PHONE_ID}/messages`
-
-// ─── CORE SEND ───────────────────────────────────────────────
-async function sendWhatsApp(to, text) {
-  if (!WA_TOKEN || !WA_PHONE_ID) {
-    console.warn('WhatsApp not configured — skipping send')
-    return false
-  }
-  // Normalise phone: strip spaces, ensure country code
-  const phone = to.replace(/\s+/g, '').replace(/^\+/, '')
+async function sendWhatsApp(to, message) {
+  if (!to) return false
 
   try {
-    const res = await fetch(WA_API_URL, {
+    const res = await fetch('/api/whatsapp', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${WA_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: phone,
-        type: 'text',
-        text: { body: text },
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, message }),
     })
-    const json = await res.json()
+
     if (!res.ok) {
-      console.error('WhatsApp API error:', json)
+      const err = await res.json().catch(() => ({}))
+      console.warn('WhatsApp send failed:', err)
       return false
     }
+
     return true
   } catch (err) {
-    console.error('WhatsApp send failed:', err)
+    console.warn('WhatsApp fetch error:', err)
     return false
   }
 }
@@ -62,50 +40,57 @@ async function sendWhatsApp(to, text) {
 // ─── MESSAGE TEMPLATES ────────────────────────────────────────
 
 export async function sendTokenConfirmation({ name, mobile, tokenNumber, vendorName, position, waitMins }) {
-  const msg =
+  const message =
     `👋 Hello ${name}!\n\n` +
     `✅ You've joined the queue at *${vendorName}*.\n\n` +
-    `🎫 Token: *T-${tokenNumber}*\n` +
+    `🎫 Your Token: *T-${tokenNumber}*\n` +
     `📍 Position: *#${position}*\n` +
     `⏱ Est. wait: *~${waitMins} min*\n\n` +
-    `Track your token anytime at: ${import.meta.env.VITE_APP_URL}\n\n` +
+    `Track your position anytime:\n${window.location.origin}/check\n\n` +
     `_QNow – Queue smarter, wait less_`
-  return sendWhatsApp(mobile, msg)
+
+  return sendWhatsApp(mobile, message)
 }
 
 export async function sendNearlyThereAlert({ name, mobile, tokenNumber, vendorName, ahead }) {
-  const msg =
+  const message =
     `⚡ *Almost your turn, ${name}!*\n\n` +
-    `Only *${ahead} people* ahead of you at *${vendorName}*.\n` +
-    `Token: *T-${tokenNumber}*\n\n` +
-    `Please make your way to the counter soon.\n\n` +
+    `Only *${ahead} ${ahead === 1 ? 'person' : 'people'}* ahead of you at *${vendorName}*.\n` +
+    `Your token: *T-${tokenNumber}*\n\n` +
+    `Please start making your way now.\n\n` +
     `_QNow_`
-  return sendWhatsApp(mobile, msg)
+
+  return sendWhatsApp(mobile, message)
 }
 
 export async function send15MinAlert({ name, mobile, tokenNumber, vendorName }) {
-  const msg =
+  const message =
     `⏰ *15-minute alert, ${name}!*\n\n` +
-    `Your turn at *${vendorName}* is coming up in approximately *15 minutes*.\n` +
+    `Your turn at *${vendorName}* is about *15 minutes away*.\n` +
     `Token: *T-${tokenNumber}*\n\n` +
-    `If you can't make it, visit the app to extend your slot:\n${import.meta.env.VITE_APP_URL}\n\n` +
+    `Head over now. Can't make it?\n` +
+    `Extend your slot: ${window.location.origin}/check\n\n` +
     `_QNow_`
-  return sendWhatsApp(mobile, msg)
+
+  return sendWhatsApp(mobile, message)
 }
 
 export async function sendYourTurnNow({ name, mobile, tokenNumber, vendorName }) {
-  const msg =
-    `🔔 *It's your turn now, ${name}!*\n\n` +
-    `Token *T-${tokenNumber}* is now being called at *${vendorName}*.\n\n` +
-    `Please proceed to the counter immediately.\n\n` +
+  const message =
+    `🔔 *It's your turn NOW, ${name}!*\n\n` +
+    `Token *T-${tokenNumber}* is being called at *${vendorName}*.\n\n` +
+    `Please go to the counter immediately.\n\n` +
     `_QNow_`
-  return sendWhatsApp(mobile, msg)
+
+  return sendWhatsApp(mobile, message)
 }
 
-export async function sendSlotExtended({ name, mobile, tokenNumber, newPosition }) {
-  const msg =
+export async function sendSlotExtended({ name, mobile, tokenNumber, vendorName, newPosition }) {
+  const message =
     `✅ *Slot extended, ${name}!*\n\n` +
-    `Token *T-${tokenNumber}* has been moved to position *#${newPosition}*.\n\n` +
+    `Your token *T-${tokenNumber}* at *${vendorName}* has been moved to position *#${newPosition}*.\n\n` +
+    `We'll notify you when your new turn approaches.\n\n` +
     `_QNow_`
-  return sendWhatsApp(mobile, msg)
+
+  return sendWhatsApp(mobile, message)
 }
