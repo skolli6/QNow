@@ -1,32 +1,49 @@
 /**
  * whatsappService.js
  *
- * Calls /api/whatsapp (our Vercel serverless proxy) instead of Meta's API directly.
- * This avoids CORS and keeps the WhatsApp token secure on the server.
+ * ALL notifications use Meta-approved template messages.
  *
- * WhatsApp is used for NOTIFICATIONS ONLY — not for login or authentication.
+ * WHY TEMPLATES ARE REQUIRED:
+ * Every notification QNow sends is business-initiated (the app messages the customer first).
+ * Meta's policy requires approved templates for all business-initiated messages.
+ * Free-form text messages are silently dropped by Meta for business-initiated sends.
  *
- * Notifications sent:
- *   1. Token confirmation (immediately after joining queue)
- *   2. 3-people-ahead alert
- *   3. 15-minute warning
- *   4. Your-turn-now alert
- *   5. Slot extended confirmation
+ * TEMPLATE NAMES (must match exactly what you created in Meta Developer Console):
+ *   queue_joined          — sent when customer joins queue
+ *   queue_reminder_15min  — sent 15 minutes before turn
+ *   queue_extend_offer    — sent when 3 people ahead (with extend option)
+ *   queue_your_turn       — sent when vendor calls next
+ *   queue_slot_extended   — sent when customer extends their slot
+ *
+ * Template approval: Meta Developer Console → WhatsApp → Message Templates
+ * Utility templates are usually approved within minutes to a few hours.
  */
 
-async function sendWhatsApp(to, message) {
-  if (!to) return false
+const APP_URL = typeof window !== 'undefined'
+  ? window.location.origin
+  : (process.env.VITE_APP_URL || 'https://qnow-chi.vercel.app')
+
+// ─── CORE SEND FUNCTION ───────────────────────────────────────
+
+async function sendTemplate(mobile, templateName, components, lang = 'en') {
+  if (!mobile) return false
 
   try {
     const res = await fetch('/api/whatsapp', {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to, message }),
+      body: JSON.stringify({
+        to:           mobile,
+        type:         'template',
+        templateName,
+        templateLang: lang,
+        components,
+      }),
     })
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      console.warn('WhatsApp send failed:', err)
+      console.warn(`WhatsApp template "${templateName}" failed:`, err)
       return false
     }
 
@@ -37,60 +54,89 @@ async function sendWhatsApp(to, message) {
   }
 }
 
-// ─── MESSAGE TEMPLATES ────────────────────────────────────────
+// ─── HELPER: build a body component with ordered parameters ──
 
+function bodyComponent(...params) {
+  return {
+    type:       'body',
+    parameters: params.map(text => ({ type: 'text', text: String(text) })),
+  }
+}
+
+// ─── NOTIFICATION FUNCTIONS ───────────────────────────────────
+
+/**
+ * Sent immediately when a customer joins the queue.
+ * Template: queue_joined
+ * Variables: {{1}}=name, {{2}}=vendorName, {{3}}=tokenNumber,
+ *            {{4}}=position, {{5}}=waitMins, {{6}}=appUrl
+ */
 export async function sendTokenConfirmation({ name, mobile, tokenNumber, vendorName, position, waitMins }) {
-  const message =
-    `👋 Hello ${name}!\n\n` +
-    `✅ You've joined the queue at *${vendorName}*.\n\n` +
-    `🎫 Your Token: *T-${tokenNumber}*\n` +
-    `📍 Position: *#${position}*\n` +
-    `⏱ Est. wait: *~${waitMins} min*\n\n` +
-    `Track your position anytime:\n${window.location.origin}/check\n\n` +
-    `_QNow – Queue smarter, wait less_`
-
-  return sendWhatsApp(mobile, message)
+  return sendTemplate(
+    mobile,
+    'queue_joined',
+    [bodyComponent(name, vendorName, tokenNumber, position, waitMins, `${APP_URL}/check`)]
+  )
 }
 
+/**
+ * Sent when only 3 (or fewer) people are ahead of the customer.
+ * Template: queue_extend_offer  (has quick reply buttons: "I'm on my way" / "Extend my slot")
+ * Variables: {{1}}=name, {{2}}=aheadCount, {{3}}=person/people, {{4}}=vendorName, {{5}}=tokenNumber
+ */
 export async function sendNearlyThereAlert({ name, mobile, tokenNumber, vendorName, ahead }) {
-  const message =
-    `⚡ *Almost your turn, ${name}!*\n\n` +
-    `Only *${ahead} ${ahead === 1 ? 'person' : 'people'}* ahead of you at *${vendorName}*.\n` +
-    `Your token: *T-${tokenNumber}*\n\n` +
-    `Please start making your way now.\n\n` +
-    `_QNow_`
-
-  return sendWhatsApp(mobile, message)
+  return sendTemplate(
+    mobile,
+    'queue_extend_offer',
+    [bodyComponent(
+      name,
+      ahead,
+      ahead === 1 ? 'person' : 'people',
+      vendorName,
+      tokenNumber,
+    )]
+  )
 }
 
+/**
+ * Sent when estimated wait drops to 15 minutes or less.
+ * Template: queue_reminder_15min
+ * Variables: {{1}}=name, {{2}}=vendorName, {{3}}=tokenNumber, {{4}}=appUrl
+ */
 export async function send15MinAlert({ name, mobile, tokenNumber, vendorName }) {
-  const message =
-    `⏰ *15-minute alert, ${name}!*\n\n` +
-    `Your turn at *${vendorName}* is about *15 minutes away*.\n` +
-    `Token: *T-${tokenNumber}*\n\n` +
-    `Head over now. Can't make it?\n` +
-    `Extend your slot: ${window.location.origin}/check\n\n` +
-    `_QNow_`
-
-  return sendWhatsApp(mobile, message)
+  return sendTemplate(
+    mobile,
+    'queue_reminder_15min',
+    [bodyComponent(name, vendorName, tokenNumber, `${APP_URL}/check`)]
+  )
 }
 
+/**
+ * Sent the moment the vendor taps "Call Next".
+ * Template: queue_your_turn
+ * Variables: {{1}}=name, {{2}}=tokenNumber, {{3}}=vendorName
+ */
 export async function sendYourTurnNow({ name, mobile, tokenNumber, vendorName }) {
-  const message =
-    `🔔 *It's your turn NOW, ${name}!*\n\n` +
-    `Token *T-${tokenNumber}* is being called at *${vendorName}*.\n\n` +
-    `Please go to the counter immediately.\n\n` +
-    `_QNow_`
-
-  return sendWhatsApp(mobile, message)
+  return sendTemplate(
+    mobile,
+    'queue_your_turn',
+    [bodyComponent(name, tokenNumber, vendorName)]
+  )
 }
 
+/**
+ * Sent when customer extends their slot.
+ * Template: queue_slot_extended
+ * Variables: {{1}}=name, {{2}}=tokenNumber, {{3}}=vendorName, {{4}}=newPosition
+ *
+ * Template body (create this in Meta):
+ * "✅ Slot extended, {{1}}! Your token T-{{2}} at {{3}} has been moved to position #{{4}}.
+ * We'll notify you when your new turn approaches. _QNow_"
+ */
 export async function sendSlotExtended({ name, mobile, tokenNumber, vendorName, newPosition }) {
-  const message =
-    `✅ *Slot extended, ${name}!*\n\n` +
-    `Your token *T-${tokenNumber}* at *${vendorName}* has been moved to position *#${newPosition}*.\n\n` +
-    `We'll notify you when your new turn approaches.\n\n` +
-    `_QNow_`
-
-  return sendWhatsApp(mobile, message)
+  return sendTemplate(
+    mobile,
+    'queue_slot_extended',
+    [bodyComponent(name, tokenNumber, vendorName, newPosition)]
+  )
 }
