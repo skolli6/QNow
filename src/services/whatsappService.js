@@ -75,7 +75,7 @@ export async function sendTokenConfirmation({ name, mobile, tokenNumber, vendorN
   return sendTemplate(
     mobile,
     'queue_joined',
-    [bodyComponent(name, vendorName, tokenNumber, position, waitMins, `${APP_URL}/check`)]
+    [bodyComponent(name, vendorName, tokenNumber, position, waitMins)]
   )
 }
 
@@ -107,7 +107,7 @@ export async function send15MinAlert({ name, mobile, tokenNumber, vendorName }) 
   return sendTemplate(
     mobile,
     'queue_reminder_15min',
-    [bodyComponent(name, vendorName, tokenNumber, `${APP_URL}/check`)]
+    [bodyComponent(name, vendorName, tokenNumber)]
   )
 }
 
